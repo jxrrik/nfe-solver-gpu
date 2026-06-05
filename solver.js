@@ -12,6 +12,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const jwt = require('jsonwebtoken');
 
 // ═══════════════════════════════════════════════════════════════════
 // CONFIG
@@ -71,8 +72,17 @@ async function preFlight() {
 // ═══════════════════════════════════════════════════════════════════
 // WEBSOCKET
 // ═══════════════════════════════════════════════════════════════════
+function generateToken() {
+  return jwt.sign(
+    { id: `nfe-solver-${NODE_ID}`, permissions: ['worker', 'service'] },
+    WS_SECRET,
+    { expiresIn: '24h' }
+  );
+}
+
 function connect() {
-  const url = `${WS_URL}?token=${encodeURIComponent(WS_SECRET)}`;
+  const token = generateToken();
+  const url = `${WS_URL}?token=${encodeURIComponent(token)}`;
   console.log(`[Solver] Conectando em ${WS_URL}...`);
   ws = new WebSocket(url);
 
