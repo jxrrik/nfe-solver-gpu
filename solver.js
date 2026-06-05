@@ -217,9 +217,15 @@ function handleRemoteUpdate(data) {
     console.log('🔄 Reiniciando via PM2 em 2s...');
     setTimeout(() => {
       try {
-        execSync('pm2 restart nfe-solver', { cwd: __dirname, timeout: 15000 });
+        execSync('pm2 restart nfe-solver', { cwd: __dirname, timeout: 15000, stdio: 'inherit' });
+        console.log('✅ PM2 restart enviado');
       } catch (e) {
-        console.log('⚡ Saindo para autorestart...');
+        console.error('⚠️ PM2 restart falhou:', e.message);
+        console.log('⚡ Fallback: saindo para autorestart do PM2...');
+        // Ensure PM2 will restart us
+        try {
+          execSync('pm2 save', { cwd: __dirname, timeout: 5000 });
+        } catch (e2) { /* ignore */ }
         process.exit(0);
       }
     }, 2000);
