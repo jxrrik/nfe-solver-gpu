@@ -1,0 +1,17 @@
+{
+  "name": "nfe-solver-gpu",
+  "version": "1.0.0",
+  "description": "Dedicated GPU CAPTCHA solver for NFe download nodes",
+  "main": "solver.js",
+  "scripts": {
+    "start": "node solver.js",
+    "dev": "node solver.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0",
+    "dotenv": "^16.3.1"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
