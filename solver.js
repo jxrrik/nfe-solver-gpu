@@ -33,6 +33,7 @@ let warmupTimer = null;
 let logFlushTimer = null;
 const stats = { total: 0, success: 0, failed: 0 };
 const logBuffer = [];
+const activeTasks = new Set(); // Track running tasks for concurrency limit
 const tempDir = path.join(__dirname, 'temp');
 if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
@@ -106,7 +107,10 @@ function connect() {
     try {
       const msg = JSON.parse(raw);
       if (msg.type === 'captcha_request') {
-        handleRequest(msg.data);
+        // Fire-and-forget: process concurrently, don't block
+        handleRequest(msg.data).catch(e => {
+          console.error('[Solver] Erro não tratado:', e.message);
+        });
       } else if (msg.type === 'remote_update') {
         handleRemoteUpdate(msg.data);
       }
@@ -261,7 +265,23 @@ async function handleRequest(data) {
   const { taskId, imageBase64, timestamp } = data || {};
   if (!taskId || !imageBase64) return;
 
-  console.log(`[Solver] Task ${taskId}`);
+  // Skip stale tasks — CAPTCHA is only visible for a few seconds on the node
+  const ageMs = Date.now() - (timestamp || Date.now());
+  if (ageMs > 10000) {
+    console.log(`[Solver] Task ${taskId} IGNORADA (já velha: ${ageMs}ms)`);
+    send({ type: 'captcha_response', data: { taskId, numbers: [], error: 'stale_task', solverId: NODE_ID } });
+    return;
+  }
+
+  // Concurrency limit — too many parallel Ollama calls can overload GPU
+  if (activeTasks.size >= 4) {
+    console.log(`[Solver] Task ${taskId} RECUSADA (limite de concorrência: ${activeTasks.size} ativas)`);
+    send({ type: 'captcha_response', data: { taskId, numbers: [], error: 'solver_busy', solverId: NODE_ID } });
+    return;
+  }
+
+  activeTasks.add(taskId);
+  console.log(`[Solver] Task ${taskId} (ativas: ${activeTasks.size})`);
   const start = Date.now();
 
   try {
@@ -277,7 +297,7 @@ async function handleRequest(data) {
     if (numbers.length > 0) stats.success++;
     else stats.failed++;
 
-    console.log(`[Solver] Task ${taskId} em ${elapsed}ms: [${numbers.join(', ') || 'NENHUM'}]`);
+    console.log(`[Solver] Task ${taskId} OK em ${elapsed}ms: [${numbers.join(', ') || 'NENHUM'}] (ativas: ${activeTasks.size})`);
 
     send({
       type: 'captcha_response',
@@ -291,6 +311,8 @@ async function handleRequest(data) {
       type: 'captcha_response',
       data: { taskId, numbers: [], error: err.message, solverId: NODE_ID }
     });
+  } finally {
+    activeTasks.delete(taskId);
   }
 }
 
