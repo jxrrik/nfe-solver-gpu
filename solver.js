@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const jwt = require('jsonwebtoken');
+const { execSync } = require('child_process');
 
 // ═══════════════════════════════════════════════════════════════════
 // CONFIG
@@ -29,7 +30,9 @@ const NODE_ID = process.env.NODE_ID || `solver-${os.hostname()}-${Math.random().
 let ws = null;
 let reconnectTimer = null;
 let warmupTimer = null;
+let logFlushTimer = null;
 const stats = { total: 0, success: 0, failed: 0 };
+const logBuffer = [];
 const tempDir = path.join(__dirname, 'temp');
 if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
@@ -53,7 +56,6 @@ async function preFlight() {
     console.log('✅ Ollama OK');
 
     // Check model
-    const { execSync } = require('child_process');
     const list = execSync('ollama list', { encoding: 'utf8', timeout: 10000 });
     if (!list.includes(MODEL)) {
       console.warn(`⚠️ Modelo ${MODEL} não encontrado. Baixando...`);
@@ -105,6 +107,8 @@ function connect() {
       const msg = JSON.parse(raw);
       if (msg.type === 'captcha_request') {
         handleRequest(msg.data);
+      } else if (msg.type === 'remote_update') {
+        handleRemoteUpdate(msg.data);
       }
     } catch (e) {
       console.error('[Solver] Mensagem inválida:', e.message);
@@ -124,6 +128,97 @@ function connect() {
 function send(payload) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(payload));
+  }
+}
+
+function flushLogs() {
+  if (!logBuffer.length || !ws || ws.readyState !== WebSocket.OPEN) return;
+  const lines = logBuffer.splice(0, 50);
+  try {
+    send({ type: 'node_logs', data: { lines } });
+  } catch (e) { /* ignore */ }
+}
+
+function setupLogStreaming() {
+  const origStdout = process.stdout.write.bind(process.stdout);
+  const origStderr = process.stderr.write.bind(process.stderr);
+
+  const capture = (chunk) => {
+    const str = typeof chunk === 'string' ? chunk : chunk.toString();
+    const lines = str.split('\n').filter(l => l.trim());
+    const ts = new Date().toISOString().slice(11, 19);
+    for (const line of lines) {
+      if (line.includes('"type":"ping"')) continue;
+      logBuffer.push(`[${ts}] ${line.trim().substring(0, 200)}`);
+      if (logBuffer.length > 100) logBuffer.shift();
+    }
+  };
+
+  process.stdout.write = (chunk, ...args) => {
+    capture(chunk);
+    return origStdout(chunk, ...args);
+  };
+
+  process.stderr.write = (chunk, ...args) => {
+    capture(chunk);
+    return origStderr(chunk, ...args);
+  };
+
+  logFlushTimer = setInterval(() => flushLogs(), 2000);
+}
+
+function handleRemoteUpdate(data) {
+  const branch = data?.branch || 'master';
+  console.log(`\n${'═'.repeat(60)}`);
+  console.log(`  🔄 REMOTE UPDATE — branch: ${branch}`);
+  console.log(`${'═'.repeat(60)}\n`);
+
+  const steps = [];
+  const run = (cmd, label) => {
+    try {
+      console.log(`⏳ ${label}...`);
+      const output = execSync(cmd, { cwd: __dirname, timeout: 60000, encoding: 'utf8' });
+      const trimmed = output.trim().slice(-200);
+      console.log(`  ✅ ${trimmed}`);
+      steps.push({ step: label, success: true, output: trimmed });
+      return true;
+    } catch (e) {
+      const errMsg = (e.stderr || e.message || '').trim().slice(-200);
+      console.error(`  ❌ ${errMsg}`);
+      steps.push({ step: label, success: false, error: errMsg });
+      return false;
+    }
+  };
+
+  run('git stash --include-untracked', 'git stash');
+  const pulled = run(`git pull origin ${branch}`, 'git pull');
+  if (!pulled) {
+    run(`git fetch origin ${branch} && git reset --hard origin/${branch}`, 'git reset --hard');
+  }
+
+  const updated = pulled || steps.some(s => s.step === 'git reset --hard' && s.success);
+  if (updated) {
+    run('npm install --production', 'npm install');
+  }
+
+  const allOk = steps.filter(s => s.step !== 'git stash').every(s => s.success);
+  send({
+    type: 'update_result',
+    data: { success: allOk, steps, nodeId: NODE_ID, branch }
+  });
+
+  console.log(`\n${allOk ? '✅' : '❌'} Update ${allOk ? 'OK' : 'FALHOU'}`);
+
+  if (allOk) {
+    console.log('🔄 Reiniciando via PM2 em 2s...');
+    setTimeout(() => {
+      try {
+        execSync('pm2 restart nfe-solver', { cwd: __dirname, timeout: 15000 });
+      } catch (e) {
+        console.log('⚡ Saindo para autorestart...');
+        process.exit(0);
+      }
+    }, 2000);
   }
 }
 
@@ -294,6 +389,8 @@ process.on('SIGTERM', () => {
 // ═══════════════════════════════════════════════════════════════════
 // START
 // ═══════════════════════════════════════════════════════════════════
+setupLogStreaming();
+
 preFlight().then(() => {
   connect();
 }).catch((err) => {
