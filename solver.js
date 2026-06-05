@@ -323,7 +323,7 @@ function postOllama(payload) {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(payload),
         },
-        timeout: 300000, // 5 min
+        timeout: 15000, // 15s — CAPTCHA is only visible for a few seconds
       },
       (res) => {
         let data = '';
