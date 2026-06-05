@@ -40,7 +40,7 @@ echo "════════════════════════�
 echo ""
 
 # Build JSON body
-BODY="{\"branch\":\"$BRANCH\""
+BODY="{\"branch\":\"$BRANCH\",\"targetType\":\"solver\""
 if [ -n "$NODE_ID" ]; then
   BODY="$BODY,\"nodeId\":\"$NODE_ID\""
 fi

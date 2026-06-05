@@ -107,6 +107,7 @@ function connect() {
     try {
       const msg = JSON.parse(raw);
       if (msg.type === 'captcha_request') {
+        console.log(`[Solver] 📨 Recebido captcha_request: ${msg.data?.taskId || 'unknown'}`);
         // Fire-and-forget: process concurrently, don't block
         handleRequest(msg.data).catch(e => {
           console.error('[Solver] Erro não tratado:', e.message);
