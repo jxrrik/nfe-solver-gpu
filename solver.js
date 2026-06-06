@@ -106,26 +106,28 @@ function connect() {
 // ═══════════════════════════════════════════════════════════════════
 // TASK QUEUE — Sequential processing, one CAPTCHA at a time
 // ═══════════════════════════════════════════════════════════════════
-const taskQueue = [];
-let currentTask = null;
-let abortCurrent = false;
+const solverState = {
+  taskQueue: [],
+  currentTask: null,
+  abortCurrent: false
+};
 
 function enqueueTask(data) {
-  taskQueue.push(data);
+  solverState.taskQueue.push(data);
   processQueue();
 }
 
 async function processQueue() {
-  if (currentTask || taskQueue.length === 0) return;
-  currentTask = taskQueue.shift();
-  abortCurrent = false;
+  if (solverState.currentTask || solverState.taskQueue.length === 0) return;
+  solverState.currentTask = solverState.taskQueue.shift();
+  solverState.abortCurrent = false;
 
   try {
-    await handleRequest(currentTask);
+    await handleRequest(solverState.currentTask);
   } catch (e) {
     console.error('[Solver] Erro na fila:', e.message);
   } finally {
-    currentTask = null;
+    solverState.currentTask = null;
     // Process next task in queue
     setImmediate(processQueue);
   }
@@ -138,14 +140,14 @@ async function processQueue() {
         enqueueTask(msg.data);
       } else if (msg.type === 'captcha_cancel') {
         const { taskId } = msg.data || {};
-        if (currentTask && currentTask.taskId === taskId) {
-          abortCurrent = true;
+        if (solverState.currentTask && solverState.currentTask.taskId === taskId) {
+          solverState.abortCurrent = true;
           console.log(`[Solver] 🚫 Tarefa ${taskId} cancelada pelo nó`);
         }
         // Remove from queue if pending
-        const idx = taskQueue.findIndex(t => t.taskId === taskId);
+        const idx = solverState.taskQueue.findIndex(t => t.taskId === taskId);
         if (idx >= 0) {
-          taskQueue.splice(idx, 1);
+          solverState.taskQueue.splice(idx, 1);
           console.log(`[Solver] 🚫 Tarefa ${taskId} removida da fila`);
         }
       } else if (msg.type === 'remote_update') {
@@ -344,7 +346,7 @@ async function handleRequest(data) {
     console.log(`[Solver] �️  Imagem salva: ${imgBytes.length} bytes às ${nowTime()}`);
 
     // Check abort flag
-    if (abortCurrent) {
+    if (solverState.abortCurrent) {
       console.log(`[Solver] 🚫 Tarefa ${taskId} abortada antes do Ollama`);
       try { fs.unlinkSync(imagePath); } catch (e) {}
       send({
@@ -367,7 +369,7 @@ async function handleRequest(data) {
     else stats.failed++;
 
     // Check abort flag after processing
-    if (abortCurrent) {
+    if (solverState.abortCurrent) {
       console.log(`[Solver] 🚫 Tarefa ${taskId} abortada após Ollama (descartando resultado)`);
       send({
         type: 'captcha_response',
