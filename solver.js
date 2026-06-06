@@ -107,7 +107,6 @@ function connect() {
     try {
       const msg = JSON.parse(raw);
       if (msg.type === 'captcha_request') {
-        console.log(`[Solver] 📨 Recebido captcha_request: ${msg.data?.taskId || 'unknown'}`);
         // Fire-and-forget: process concurrently, don't block
         handleRequest(msg.data).catch(e => {
           console.error('[Solver] Erro não tratado:', e.message);
@@ -252,14 +251,26 @@ function startWarmup() {
 
 async function warmupPing() {
   try {
+    // Criar uma imagem dummy 1x1 PNG preta para forçar carregamento do modelo VL na VRAM
+    const dummyImage = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+      'base64'
+    );
+    const dummyPath = path.join(tempDir, 'warmup.png');
+    fs.writeFileSync(dummyPath, dummyImage);
+
+    console.log('[Solver] 🌡️  Warmup — carregando modelo na VRAM...');
+    const start = Date.now();
     await postOllama(JSON.stringify({
       model: MODEL,
-      prompt: '',
-      images: [],
+      prompt: 'warmup',
+      images: [dummyImage.toString('base64')],
       stream: false,
-      keep_alive: '10m'
+      keep_alive: '30m'
     }));
-    console.log('[Solver] Warmup OK');
+    console.log(`[Solver] 🌡️  Warmup OK em ${Date.now() - start}ms`);
+
+    try { fs.unlinkSync(dummyPath); } catch (e) {}
   } catch (e) {
     console.warn('[Solver] Warmup falhou:', e.message);
   }
@@ -268,34 +279,36 @@ async function warmupPing() {
 // ═══════════════════════════════════════════════════════════════════
 // CAPTCHA SOLVING
 // ═══════════════════════════════════════════════════════════════════
-async function handleRequest(data) {
-  const { taskId, imageBase64, timestamp } = data || {};
-  if (!taskId || !imageBase64) return;
+function nowTime() {
+  const d = new Date();
+  return d.toTimeString().slice(0, 8);
+}
 
-  // Skip stale tasks — CAPTCHA is only visible for a few seconds on the node
-  const ageMs = Date.now() - (timestamp || Date.now());
-  if (ageMs > 10000) {
-    console.log(`[Solver] Task ${taskId} IGNORADA (já velha: ${ageMs}ms)`);
-    send({ type: 'captcha_response', data: { taskId, numbers: [], error: 'stale_task', solverId: NODE_ID } });
-    return;
-  }
+async function handleRequest(data) {
+  const { taskId, imageBase64, timestamp, nodeId } = data || {};
+  if (!taskId || !imageBase64) return;
 
   // Concurrency limit — too many parallel Ollama calls can overload GPU
   if (activeTasks.size >= 4) {
-    console.log(`[Solver] Task ${taskId} RECUSADA (limite de concorrência: ${activeTasks.size} ativas)`);
-    send({ type: 'captcha_response', data: { taskId, numbers: [], error: 'solver_busy', solverId: NODE_ID } });
+    console.log(`[Solver] Task ${taskId} RECUSADA (limite: ${activeTasks.size} ativas) às ${nowTime()}`);
+    send({ type: 'captcha_response', data: { taskId, numbers: [], error: 'solver_busy', solverId: NODE_ID, timestamp: Date.now() } });
     return;
   }
 
   activeTasks.add(taskId);
-  console.log(`[Solver] Task ${taskId} (ativas: ${activeTasks.size})`);
   const start = Date.now();
+  console.log(`[Solver] 📨 Recebido captcha_request: ${taskId} do nó: ${nodeId || '?'} às ${nowTime()}`);
 
   try {
     const imagePath = path.join(tempDir, `task_${taskId}.png`);
-    fs.writeFileSync(imagePath, Buffer.from(imageBase64, 'base64'));
+    const imgBytes = Buffer.from(imageBase64, 'base64');
+    fs.writeFileSync(imagePath, imgBytes);
+    console.log(`[Solver] 🖼️  Imagem salva: ${imgBytes.length} bytes às ${nowTime()}`);
 
+    console.log(`[Solver] 🧠 Enviando para Ollama (${MODEL})...`);
+    const ollamaStart = Date.now();
     const numbers = await solveWithOllama(imagePath);
+    const ollamaElapsed = Date.now() - ollamaStart;
 
     try { fs.unlinkSync(imagePath); } catch (e) {}
 
@@ -304,19 +317,20 @@ async function handleRequest(data) {
     if (numbers.length > 0) stats.success++;
     else stats.failed++;
 
-    console.log(`[Solver] Task ${taskId} OK em ${elapsed}ms: [${numbers.join(', ') || 'NENHUM'}] (ativas: ${activeTasks.size})`);
+    console.log(`[Solver] ✅ Resposta Ollama: [${numbers.join(', ') || 'NENHUM'}] em ${ollamaElapsed}ms às ${nowTime()}`);
+    console.log(`[Solver] 📤 Enviando captcha_response para nó: ${nodeId || '?'} às ${nowTime()}`);
 
     send({
       type: 'captcha_response',
-      data: { taskId, numbers, elapsedMs: elapsed, solverId: NODE_ID }
+      data: { taskId, numbers, elapsedMs: elapsed, solverNode: NODE_ID, timestamp: Date.now() }
     });
   } catch (err) {
     stats.total++;
     stats.failed++;
-    console.error(`[Solver] Erro task ${taskId}:`, err.message);
+    console.error(`[Solver] ❌ Erro task ${taskId}:`, err.message, `às ${nowTime()}`);
     send({
       type: 'captcha_response',
-      data: { taskId, numbers: [], error: err.message, solverId: NODE_ID }
+      data: { taskId, numbers: [], error: err.message, solverNode: NODE_ID, timestamp: Date.now() }
     });
   } finally {
     activeTasks.delete(taskId);
@@ -352,7 +366,7 @@ function postOllama(payload) {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(payload),
         },
-        timeout: 15000, // 15s — CAPTCHA is only visible for a few seconds
+        timeout: 300000, // 5 min — GTX 1070 leva ~60s por inferência; margem de segurança
       },
       (res) => {
         let data = '';
