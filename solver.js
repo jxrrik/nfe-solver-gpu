@@ -242,26 +242,15 @@ function startWarmup() {
 
 async function warmupPing() {
   try {
-    // Criar uma imagem dummy 1x1 PNG preta para forçar carregamento do modelo VL na VRAM
-    const dummyImage = Buffer.from(
-      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
-      'base64'
-    );
-    const dummyPath = path.join(tempDir, 'warmup.png');
-    fs.writeFileSync(dummyPath, dummyImage);
-
-    console.log('[Solver] 🌡️  Warmup — carregando modelo na VRAM...');
+    console.log('[Solver] 🌡️  Warmup — mantendo modelo na VRAM...');
     const start = Date.now();
     await postOllama(JSON.stringify({
       model: MODEL,
       prompt: 'warmup',
-      images: [dummyImage.toString('base64')],
       stream: false,
       keep_alive: '30m'
     }));
     console.log(`[Solver] 🌡️  Warmup OK em ${Date.now() - start}ms`);
-
-    try { fs.unlinkSync(dummyPath); } catch (e) {}
   } catch (e) {
     console.warn('[Solver] Warmup falhou:', e.message);
   }
