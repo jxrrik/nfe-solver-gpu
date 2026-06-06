@@ -255,23 +255,38 @@ function handleRemoteUpdate(data) {
   if (allOk) {
     console.log('🔄 Reiniciando via PM2 em 3s...');
     setTimeout(() => {
-      try {
-        // 1. Tentar restart via ecosystem.config.js
-        execSync('pm2 restart ecosystem.config.js', { cwd: __dirname, timeout: 15000 });
-        console.log('✅ PM2 restart via ecosystem OK');
-      } catch (e) {
-        console.error('⚠️ PM2 restart ecosystem falhou:', e.message);
-        try {
-          // 2. Fallback: restart pelo nome
-          execSync('pm2 restart nfe-solver', { cwd: __dirname, timeout: 10000 });
-          console.log('✅ PM2 restart via nome OK');
-        } catch (e2) {
-          console.error('⚠️ PM2 restart nome falhou:', e2.message);
-          // 3. Último recurso: sair para autorestart
-          console.log('⚡ Saindo para autorestart do PM2...');
+      const { spawn } = require('child_process');
+
+      // Spawn detached para não bloquear — funciona no Windows e Linux
+      const child = spawn('pm2', ['restart', 'ecosystem.config.js'], {
+        cwd: __dirname,
+        detached: true,
+        shell: true,
+        stdio: 'ignore'
+      });
+      child.on('error', (err) => {
+        console.error('⚠️ Spawn PM2 falhou:', err.message);
+        // Fallback: tentar pelo nome
+        const child2 = spawn('pm2', ['restart', 'nfe-solver'], {
+          cwd: __dirname,
+          detached: true,
+          shell: true,
+          stdio: 'ignore'
+        });
+        child2.on('error', () => {
+          console.log('⚡ Saindo para autorestart...');
           process.exit(0);
-        }
-      }
+        });
+        child2.unref();
+        setTimeout(() => process.exit(0), 500);
+      });
+      child.unref();
+
+      // Sair rapidamente para liberar o processo
+      setTimeout(() => {
+        console.log('⚡ Saindo...');
+        process.exit(0);
+      }, 500);
     }, 3000);
   }
 }
