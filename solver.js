@@ -103,36 +103,6 @@ function connect() {
     startWarmup();
   });
 
-// ═══════════════════════════════════════════════════════════════════
-// TASK QUEUE — Sequential processing, one CAPTCHA at a time
-// ═══════════════════════════════════════════════════════════════════
-const solverState = {
-  taskQueue: [],
-  currentTask: null,
-  abortCurrent: false
-};
-
-function enqueueTask(data) {
-  solverState.taskQueue.push(data);
-  processQueue();
-}
-
-async function processQueue() {
-  if (solverState.currentTask || solverState.taskQueue.length === 0) return;
-  solverState.currentTask = solverState.taskQueue.shift();
-  solverState.abortCurrent = false;
-
-  try {
-    await handleRequest(solverState.currentTask);
-  } catch (e) {
-    console.error('[Solver] Erro na fila:', e.message);
-  } finally {
-    solverState.currentTask = null;
-    // Process next task in queue
-    setImmediate(processQueue);
-  }
-}
-
   ws.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw);
@@ -166,6 +136,36 @@ async function processQueue() {
   ws.on('error', (err) => {
     console.error('[Solver] Erro WS:', err.message);
   });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TASK QUEUE — Sequential processing, one CAPTCHA at a time
+// ═══════════════════════════════════════════════════════════════════
+const solverState = {
+  taskQueue: [],
+  currentTask: null,
+  abortCurrent: false
+};
+
+function enqueueTask(data) {
+  solverState.taskQueue.push(data);
+  processQueue();
+}
+
+async function processQueue() {
+  if (solverState.currentTask || solverState.taskQueue.length === 0) return;
+  solverState.currentTask = solverState.taskQueue.shift();
+  solverState.abortCurrent = false;
+
+  try {
+    await handleRequest(solverState.currentTask);
+  } catch (e) {
+    console.error('[Solver] Erro na fila:', e.message);
+  } finally {
+    solverState.currentTask = null;
+    // Process next task in queue
+    setImmediate(processQueue);
+  }
 }
 
 function send(payload) {
