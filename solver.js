@@ -214,12 +214,19 @@ function handleRemoteUpdate(data) {
   console.log(`\n${allOk ? '✅' : '❌'} Update ${allOk ? 'OK' : 'FALHOU'}`);
 
   if (allOk) {
-    console.log('🔄 Reiniciando via PM2 em 2s...');
+    console.log('🔄 Reiniciando via PM2 em 3s...');
+    // Spawn separado para evitar deadlock no Windows
     setTimeout(() => {
-      // Simples e confiável: sair para que o PM2 (autorestart=true) reinicie o processo
-      console.log('⚡ Saindo para autorestart do PM2...');
+      const { spawn } = require('child_process');
+      spawn('cmd.exe', ['/c', 'timeout /t 1 >nul && pm2 restart nfe-solver'], {
+        detached: true,
+        stdio: 'ignore',
+        cwd: __dirname,
+        shell: false
+      });
+      console.log('⚡ Saindo...');
       process.exit(0);
-    }, 2000);
+    }, 3000);
   }
 }
 
