@@ -103,14 +103,51 @@ function connect() {
     startWarmup();
   });
 
+// ═══════════════════════════════════════════════════════════════════
+// TASK QUEUE — Sequential processing, one CAPTCHA at a time
+// ═══════════════════════════════════════════════════════════════════
+const taskQueue = [];
+let currentTask = null;
+let abortCurrent = false;
+
+function enqueueTask(data) {
+  taskQueue.push(data);
+  processQueue();
+}
+
+async function processQueue() {
+  if (currentTask || taskQueue.length === 0) return;
+  currentTask = taskQueue.shift();
+  abortCurrent = false;
+
+  try {
+    await handleRequest(currentTask);
+  } catch (e) {
+    console.error('[Solver] Erro na fila:', e.message);
+  } finally {
+    currentTask = null;
+    // Process next task in queue
+    setImmediate(processQueue);
+  }
+}
+
   ws.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw);
       if (msg.type === 'captcha_request') {
-        // Fire-and-forget: process concurrently, don't block
-        handleRequest(msg.data).catch(e => {
-          console.error('[Solver] Erro não tratado:', e.message);
-        });
+        enqueueTask(msg.data);
+      } else if (msg.type === 'captcha_cancel') {
+        const { taskId } = msg.data || {};
+        if (currentTask && currentTask.taskId === taskId) {
+          abortCurrent = true;
+          console.log(`[Solver] 🚫 Tarefa ${taskId} cancelada pelo nó`);
+        }
+        // Remove from queue if pending
+        const idx = taskQueue.findIndex(t => t.taskId === taskId);
+        if (idx >= 0) {
+          taskQueue.splice(idx, 1);
+          console.log(`[Solver] 🚫 Tarefa ${taskId} removida da fila`);
+        }
       } else if (msg.type === 'remote_update') {
         handleRemoteUpdate(msg.data);
       }
@@ -275,22 +312,40 @@ async function handleRequest(data) {
   const { taskId, imageBase64, timestamp, nodeId } = data || {};
   if (!taskId || !imageBase64) return;
 
-  // Concurrency limit — too many parallel Ollama calls can overload GPU
-  if (activeTasks.size >= 4) {
-    console.log(`[Solver] Task ${taskId} RECUSADA (limite: ${activeTasks.size} ativas) às ${nowTime()}`);
-    send({ type: 'captcha_response', data: { taskId, numbers: [], error: 'solver_busy', solverId: NODE_ID, timestamp: Date.now() } });
-    return;
-  }
-
-  activeTasks.add(taskId);
   const start = Date.now();
   console.log(`[Solver] 📨 Recebido captcha_request: ${taskId} do nó: ${nodeId || '?'} às ${nowTime()}`);
+
+  // 1. Send ACK to confirm we accepted the task
+  send({ type: 'captcha_ack', data: { taskId } });
+  console.log(`[Solver] 👍 ACK enviado para task ${taskId}`);
 
   try {
     const imagePath = path.join(tempDir, `task_${taskId}.png`);
     const imgBytes = Buffer.from(imageBase64, 'base64');
+
+    // Check for empty/corrupted image
+    if (imgBytes.length < 30000) {
+      console.warn(`[Solver] ⚠️ Imagem muito pequena (${imgBytes.length} bytes) — provavelmente vazia`);
+      send({
+        type: 'captcha_response',
+        data: { taskId, numbers: [], error: 'empty_image', solverNode: NODE_ID, timestamp: Date.now() }
+      });
+      return;
+    }
+
     fs.writeFileSync(imagePath, imgBytes);
-    console.log(`[Solver] 🖼️  Imagem salva: ${imgBytes.length} bytes às ${nowTime()}`);
+    console.log(`[Solver] �️  Imagem salva: ${imgBytes.length} bytes às ${nowTime()}`);
+
+    // Check abort flag
+    if (abortCurrent) {
+      console.log(`[Solver] 🚫 Tarefa ${taskId} abortada antes do Ollama`);
+      try { fs.unlinkSync(imagePath); } catch (e) {}
+      send({
+        type: 'captcha_response',
+        data: { taskId, numbers: [], error: 'cancelled', solverNode: NODE_ID, timestamp: Date.now() }
+      });
+      return;
+    }
 
     console.log(`[Solver] 🧠 Enviando para Ollama (${MODEL})...`);
     const ollamaStart = Date.now();
@@ -303,6 +358,16 @@ async function handleRequest(data) {
     stats.total++;
     if (numbers.length > 0) stats.success++;
     else stats.failed++;
+
+    // Check abort flag after processing
+    if (abortCurrent) {
+      console.log(`[Solver] 🚫 Tarefa ${taskId} abortada após Ollama (descartando resultado)`);
+      send({
+        type: 'captcha_response',
+        data: { taskId, numbers: [], error: 'cancelled', solverNode: NODE_ID, timestamp: Date.now() }
+      });
+      return;
+    }
 
     console.log(`[Solver] ✅ Resposta Ollama: [${numbers.join(', ') || 'NENHUM'}] em ${ollamaElapsed}ms às ${nowTime()}`);
     console.log(`[Solver] 📤 Enviando captcha_response para nó: ${nodeId || '?'} às ${nowTime()}`);
@@ -319,14 +384,12 @@ async function handleRequest(data) {
       type: 'captcha_response',
       data: { taskId, numbers: [], error: err.message, solverNode: NODE_ID, timestamp: Date.now() }
     });
-  } finally {
-    activeTasks.delete(taskId);
   }
 }
 
 async function solveWithOllama(imagePath) {
   const imageBase64 = fs.readFileSync(imagePath).toString('base64');
-  const prompt = `Analise o DESAFIO na parte superior da imagem. Em seguida, identifique quais dos 9 quadrantes na grade inferior (organizados em 3x3, numerados da esquerda para a direita, de cima para baixo: 1,2,3 na primeira linha; 4,5,6 na segunda; 7,8,9 na terceira) correspondem a resposta correta do desafio. IMPORTANTE: Responda APENAS com os numeros separados por virgula, sem nenhum texto adicional. Exemplo: 1, 4, 7`;
+  const prompt = `Analise o DESAFIO na parte superior da imagem. Em seguida, identifique quais dos 9 quadrantes na grade inferior (organizados em 3x3, numerados da esquerda para a direita, de cima para baixo: 1,2,3 na primeira linha; 4,5,6 na segunda; 7,8,9 na terceira) correspondem a resposta correta do desafio. IMPORTANTE: Responda APENAS com os numeros separados por virgula, sem nenhum texto adicional. Nao inclua palavras, explicacoes ou o exemplo.`;
 
   const response = await postOllama(JSON.stringify({
     model: MODEL,
