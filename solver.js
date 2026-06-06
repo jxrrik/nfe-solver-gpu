@@ -255,17 +255,9 @@ function handleRemoteUpdate(data) {
   if (allOk) {
     console.log('🔄 Reiniciando via PM2 em 3s...');
     setTimeout(() => {
-      const { spawn } = require('child_process');
-      // Inicia nova instância detached — PM2 vai gerenciar quando esta morrer
-      const child = spawn(process.execPath, ['solver.js'], {
-        cwd: __dirname,
-        detached: true,
-        stdio: ['ignore', 'ignore', 'ignore'],
-        env: process.env
-      });
-      child.unref();
-      console.log('⚡ Saindo (nova instância iniciada)...');
-      process.exit(0);
+      // PM2 autorestart reinicia quando processo sai com código != 0
+      console.log('⚡ Saindo para autorestart do PM2...');
+      process.exit(1);
     }, 3000);
   }
 }
