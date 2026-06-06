@@ -255,38 +255,12 @@ function handleRemoteUpdate(data) {
   if (allOk) {
     console.log('🔄 Reiniciando via PM2 em 3s...');
     setTimeout(() => {
-      const { spawn } = require('child_process');
-
-      // Spawn detached para não bloquear — funciona no Windows e Linux
-      const child = spawn('pm2', ['restart', 'ecosystem.config.js'], {
-        cwd: __dirname,
-        detached: true,
-        shell: true,
-        stdio: 'ignore'
-      });
-      child.on('error', (err) => {
-        console.error('⚠️ Spawn PM2 falhou:', err.message);
-        // Fallback: tentar pelo nome
-        const child2 = spawn('pm2', ['restart', 'nfe-solver'], {
-          cwd: __dirname,
-          detached: true,
-          shell: true,
-          stdio: 'ignore'
-        });
-        child2.on('error', () => {
-          console.log('⚡ Saindo para autorestart...');
-          process.exit(0);
-        });
-        child2.unref();
-        setTimeout(() => process.exit(0), 500);
-      });
-      child.unref();
-
-      // Sair rapidamente para liberar o processo
-      setTimeout(() => {
-        console.log('⚡ Saindo...');
-        process.exit(0);
-      }, 500);
+      const { exec } = require('child_process');
+      // exec async — não bloqueia, roda em background
+      exec('pm2 restart nfe-solver', { cwd: __dirname });
+      // Sair rapidamente para PM2 reiniciar
+      console.log('⚡ Saindo...');
+      process.exit(0);
     }, 3000);
   }
 }
