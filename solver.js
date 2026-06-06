@@ -252,17 +252,24 @@ function handleRemoteUpdate(data) {
 
   if (allOk) {
     console.log('🔄 Reiniciando via PM2 em 3s...');
-    // Spawn separado para evitar deadlock no Windows
     setTimeout(() => {
-      const { spawn } = require('child_process');
-      spawn('cmd.exe', ['/c', 'timeout /t 1 >nul && pm2 restart nfe-solver'], {
-        detached: true,
-        stdio: 'ignore',
-        cwd: __dirname,
-        shell: false
-      });
-      console.log('⚡ Saindo...');
-      process.exit(0);
+      try {
+        // 1. Tentar restart via ecosystem.config.js
+        execSync('pm2 restart ecosystem.config.js', { cwd: __dirname, timeout: 15000 });
+        console.log('✅ PM2 restart via ecosystem OK');
+      } catch (e) {
+        console.error('⚠️ PM2 restart ecosystem falhou:', e.message);
+        try {
+          // 2. Fallback: restart pelo nome
+          execSync('pm2 restart nfe-solver', { cwd: __dirname, timeout: 10000 });
+          console.log('✅ PM2 restart via nome OK');
+        } catch (e2) {
+          console.error('⚠️ PM2 restart nome falhou:', e2.message);
+          // 3. Último recurso: sair para autorestart
+          console.log('⚡ Saindo para autorestart do PM2...');
+          process.exit(0);
+        }
+      }
     }, 3000);
   }
 }
