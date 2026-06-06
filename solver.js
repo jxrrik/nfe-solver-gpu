@@ -255,9 +255,17 @@ function handleRemoteUpdate(data) {
   if (allOk) {
     console.log('🔄 Reiniciando via PM2 em 3s...');
     setTimeout(() => {
-      // PM2 restart crasha no Windows — sair e deixar PM2 autorestart
-      console.log('⚡ Saindo para autorestart do PM2...');
-      process.exit(1);
+      const { spawn } = require('child_process');
+      // Inicia nova instância detached — PM2 vai gerenciar quando esta morrer
+      const child = spawn(process.execPath, ['solver.js'], {
+        cwd: __dirname,
+        detached: true,
+        stdio: ['ignore', 'ignore', 'ignore'],
+        env: process.env
+      });
+      child.unref();
+      console.log('⚡ Saindo (nova instância iniciada)...');
+      process.exit(0);
     }, 3000);
   }
 }
