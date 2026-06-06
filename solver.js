@@ -255,12 +255,9 @@ function handleRemoteUpdate(data) {
   if (allOk) {
     console.log('🔄 Reiniciando via PM2 em 3s...');
     setTimeout(() => {
-      const { exec } = require('child_process');
-      // exec async — não bloqueia, roda em background
-      exec('pm2 restart nfe-solver', { cwd: __dirname });
-      // Sair rapidamente para PM2 reiniciar
-      console.log('⚡ Saindo...');
-      process.exit(0);
+      // PM2 restart crasha no Windows — sair e deixar PM2 autorestart
+      console.log('⚡ Saindo para autorestart do PM2...');
+      process.exit(1);
     }, 3000);
   }
 }
